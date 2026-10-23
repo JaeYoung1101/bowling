@@ -2,14 +2,20 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>랜덤 캐릭터 볼링</title>
 <style>
 :root{
   --bg:#0f1220;--panel:#181c2e;--panel2:#21263d;--text:#e9ebf3;--muted:#9aa1ba;
   --accent:#ffb020;--good:#3ecf8e;--bad:#ff6b6b;--line:#2d3352;
   --gS:#ffcf3f;--gA:#c38bff;--gB:#5aa9ff;--gC:#9aa1ba;
+  color-scheme:dark;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
 }
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1220;--panel:#181c2e;--text:#e9ebf3}}
+:root[data-theme="dark"]{--bg:#0f1220;--panel:#181c2e;--text:#e9ebf3}
+html{scroll-padding-top:env(safe-area-inset-top,0px);background:var(--bg)}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);
   font-family:"Pretendard","Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif;}
@@ -23,6 +29,7 @@ h1{margin:8px 0 4px;font-size:26px;letter-spacing:-.5px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .seg button{background:var(--panel2);color:var(--text);border:1px solid var(--line);padding:8px 16px;border-radius:8px;font-size:15px}
 .seg button.on{background:var(--accent);color:#1a1300;border-color:var(--accent);font-weight:700}
+.dnote{color:var(--muted);font-size:13px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin:16px 0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
 .card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
@@ -120,11 +127,12 @@ table.score td.tot{font-weight:800;font-size:15px}
     <span style="color:var(--muted);font-size:14px">인원</span>
     <div class="seg row" id="cnt"></div>
   </div>
+  <p class="dnote" style="margin:10px 0 0">CPU 실력은 캐릭터 등급을 따라갑니다. S는 거의 프로, A는 잘 치는 편, B는 평범, C는 거터도 자주 냅니다.</p>
   <div class="cards" id="cards"></div>
   <div class="row" style="justify-content:space-between;gap:12px">
     <div class="legend" style="flex:1;min-width:260px">
-      <b>팔 힘</b> 공 최고 속도 · <b>다리 힘</b> 방향 안정성(바늘이 느려지고 흔들림 감소) · <b>손가락 힘</b> 회전(훅) 크기와 정확도 · <b>운</b> 프레임마다 "오늘의 운"이 정해지며, 높으면 흔들리던 핀이 쓰러지는 럭키가, 낮으면 손이 미끄러지는 실수가 생깁니다.<br>
-      조작: <b>◀ ▶</b>(방향키)로 위치 → <b>결정</b>(스페이스)으로 방향 · 힘 · 회전을 차례로 멈춥니다.
+      <b>팔 힘</b> 공 최고 속도 · <b>다리 힘</b> 방향 안정성(바늘이 느려지고 흔들림 감소) · <b>손가락 힘</b> 회전(훅) 크기와 정확도 · <b>운</b> 프레임마다 “오늘의 운”이 정해지며, 높으면 흔들리던 핀이 쓰러지는 럭키가, 낮으면 손이 미끄러지는 실수가 생깁니다.<br>
+      조작: <b>◀ ▶</b>(방향키)로 위치 → <b>결정</b>(스페이스)으로 방향 · 힘 · 회전을 차례로 멈춥니다. 점선은 공이 갈 예상 경로입니다.
     </div>
     <button class="big" id="startBtn">게임 시작</button>
   </div>
@@ -184,6 +192,22 @@ const LANE_W=0.532, GUTTER=0.24, LANE_LEN=18.29, DECK_END=19.15, BALL_R=0.109, P
 const BALL_M=7, PIN_M=1.6;
 const PIN_POS=[[0,0],[-0.1524,0.2639],[0.1524,0.2639],[-0.3048,0.5278],[0,0.5278],[0.3048,0.5278],
                [-0.4572,0.7917],[-0.1524,0.7917],[0.1524,0.7917],[0.4572,0.7917]];
+
+/* ================= CPU 실력 (등급별) =================
+   tgt  : 노리는 지점 자체의 오차(m)
+   aim  : 방향 오차 계수 (원래 버전 = 0.08)
+   spin : 회전 오차 계수 (원래 버전 = 0.08)
+   miss : 크게 빗나가는 실수 확률
+   pw   : 힘 범위
+   S는 처음 버전과 같은 실력입니다. */
+const CPU_SKILL={
+  S:{tgt:0,    aim:0.08,spin:0.08,miss:0,   pw:[0.62,0.9]},
+  A:{tgt:0.05, aim:0.3, spin:0.15,miss:0.05,pw:[0.58,0.92]},
+  B:{tgt:0.11, aim:0.65,spin:0.25,miss:0.13,pw:[0.5,0.95]},
+  C:{tgt:0.2,  aim:1.1, spin:0.4, miss:0.28,pw:[0.4,1]}
+};
+// 사람 조준 도움: 예상 경로 길이(m), 손 흔들림 배율
+const HUMAN={guide:10,hand:0.8};
 
 /* ================= 캐릭터 ================= */
 const ADJ=["번개","강철","느긋한","행운의","졸린","불꽃","조용한","왼손잡이","전설의","초보","야근하는","배고픈","수상한","새벽","무념무상"];
@@ -283,24 +307,26 @@ function startRoll(){
 }
 
 /* ================= 던지기 ================= */
+const ballSpeed=(power,st)=>4+power*((6+st.arm*0.3)-4);
+const ballHook=(spin,st)=>spin*st.finger*0.075;
 function throwBall(x0,aimDeg,power,spin){
   const pl=cur(),st=pl.stats,L=G.todayLuck;
-  const noiseMul=1.15-L*0.03;
+  const hand=pl.type==="human"?HUMAN.hand:1;
+  const noiseMul=(1.15-L*0.03)*hand;
   if(Math.random()<(10-L)*0.012){aimDeg+=randn()*1.6;power*=0.85;toast("손이 미끄러졌다!",true);}
   aimDeg+=randn()*(11-st.leg)*0.07*noiseMul;
   if(power>0.9)aimDeg+=randn()*(power-0.9)*10*(11-st.leg)*0.06;
   spin=clamp(spin+randn()*(11-st.finger)*0.035*noiseMul,-1,1);
-  const vmax=6+st.arm*0.3;
-  const v=clamp(4+power*(vmax-4)+randn()*0.1,3.5,9.6);
+  const v=clamp(ballSpeed(power,st)+randn()*0.1,3.5,9.6);
   const a=aimDeg*Math.PI/180;
-  Object.assign(G.ball,{x:x0,y:0,vx:v*Math.sin(a),vy:v*Math.cos(a),hook:spin*st.finger*0.075,active:true,inGutter:false});
+  Object.assign(G.ball,{x:x0,y:0,vx:v*Math.sin(a),vy:v*Math.cos(a),hook:ballHook(spin,st),active:true,inGutter:false});
   G.phase="rolling";G.simTime=0;
   const sp=$("#speed");sp.textContent=`${(v*3.6).toFixed(1)} km/h`;sp.classList.remove("hidden");
   updateControls();
 }
 
 function cpuPlan(){
-  const st=cur().stats,stand=G.pins.filter(p=>!p.gone&&!p.down);
+  const pl=cur(),st=pl.stats,K=CPU_SKILL[pl.grade],stand=G.pins.filter(p=>!p.gone&&!p.down);
   let spin,x0,target;
   if(G.freshRack){
     const lefty=Math.random()<0.3;
@@ -309,16 +335,34 @@ function cpuPlan(){
     const ax=stand.reduce((s,p)=>s+p.x,0)/Math.max(1,stand.length);
     spin=rand(-0.15,0.15);x0=clamp(-ax*0.5,-0.35,0.35);target=ax;
   }
-  const power=rand(0.62,0.9),vmax=6+st.arm*0.3,v=4+power*(vmax-4),hook=spin*st.finger*0.075;
+  // 다리·손가락 힘이 낮을수록 오차가 커짐 (원래 버전과 같은 공식)
+  const legK=(11-st.leg)/5,fingerK=(11-st.finger)/5;
+  target+=randn()*K.tgt*legK;
+  const power=rand(K.pw[0],K.pw[1]),v=ballSpeed(power,st),hook=ballHook(spin,st);
   let best=0,err=1e9;
   for(let a=-3.5;a<=3.5;a+=0.05){const e=Math.abs(pathEnd(x0,a,v,hook)-target);if(e<err){err=e;best=a;}}
-  return {x0,aim:clamp(best+randn()*0.08*(11-st.leg)/5,-3.5,3.5),power:clamp(power+randn()*0.04,0,1),
-          spin:clamp(spin+randn()*0.08*(11-st.finger)/5,-1,1)};
+  let aim=best+randn()*K.aim*legK;
+  // 가끔 크게 빗나가는 실수 (운이 높을수록 덜 함)
+  if(Math.random()<K.miss*(1.25-st.luck*0.05))aim+=(Math.random()<0.5?-1:1)*rand(0.6,1.8);
+  return {x0,aim:clamp(aim,-3.5,3.5),power:clamp(power+randn()*(pl.grade==="S"?0.04:0.06),0,1),
+          spin:clamp(spin+randn()*K.spin*fingerK,-1,1)};
 }
 function pathEnd(x0,aimDeg,v,hook){
   const a=aimDeg*Math.PI/180;let x=x0,y=0,vx=v*Math.sin(a),vy=v*Math.cos(a);const dt=0.01;
   while(y<LANE_LEN){const ramp=clamp((y-7)/5,0,1);vx+=hook*ramp*dt;vy*=(1-0.015*dt);x+=vx*dt;y+=vy*dt;}
   return x;
+}
+// 예상 경로 (노이즈 없이)
+function predictPath(x0,aimDeg,power,spin,st,maxY){
+  const a=aimDeg*Math.PI/180,v=ballSpeed(power,st),hook=ballHook(spin,st);
+  let x=x0,y=0,vx=v*Math.sin(a),vy=v*Math.cos(a);const dt=0.02,pts=[[x,y]];let acc=0;
+  while(y<maxY){
+    const ramp=clamp((y-7)/5,0,1);vx+=hook*ramp*dt;vy*=(1-0.015*dt);x+=vx*dt;y+=vy*dt;acc+=vy*dt;
+    if(Math.abs(x)>LANE_W){pts.push([Math.sign(x)*LANE_W,y]);break;}
+    if(acc>0.3){pts.push([x,y]);acc=0;}
+  }
+  pts.push([x,Math.min(y,maxY)]);
+  return pts;
 }
 
 /* ================= 물리 ================= */
@@ -488,9 +532,9 @@ function toast(msg,small){
 }
 const HINTS={
   position:"◀ ▶ (방향키)로 서는 위치를 고르고 [결정]",
-  aim:"방향 바늘이 흔들립니다. 원하는 순간에 [결정] (다리 힘이 높을수록 느리게 흔들림)",
+  aim:"방향 바늘이 흔들립니다. 점선이 노리는 곳을 향할 때 [결정]",
   power:"힘 게이지 — 90%를 넘기면 세게 나가지만 방향이 흔들릴 수 있어요",
-  spin:"회전 — 왼쪽/오른쪽으로 휘는 정도. 손가락 힘이 높을수록 많이 휩니다",
+  spin:"회전 — 점선이 휘는 걸 보고 [결정]. 손가락 힘이 높을수록 많이 휩니다",
   cpu:"CPU가 던질 준비를 하고 있습니다…",
   rolling:"",settling:"",done:""
 };
@@ -579,6 +623,21 @@ function line3(a,b,stroke,w){
   const p=P(a[0],a[1],a[2]||0),q=P(b[0],b[1],b[2]||0);if(!p||!q)return;
   ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.strokeStyle=stroke;ctx.lineWidth=w;ctx.stroke();
 }
+function drawGuide(){
+  const st=cur().stats,human=cur().type==="human";
+  const maxY=human?HUMAN.guide:7.3;
+  const pw=(G.phase==="aim"||(G.phase==="cpu"&&G.cpuStage<2))?0.7:G.power;
+  const sp=(G.phase==="spin"||(G.phase==="cpu"&&G.cpuStage>=3))?G.spin:0;
+  const pts=predictPath(G.x0,G.aim,pw,sp,st,maxY);
+  ctx.beginPath();let started=false;
+  for(const p of pts){
+    if(p[1]<cam.y+0.1)continue;const q=P(p[0],p[1],0.01);if(!q)continue;
+    if(started)ctx.lineTo(q.x,q.y);else{ctx.moveTo(q.x,q.y);started=true;}
+  }
+  ctx.setLineDash([6,8]);ctx.strokeStyle="rgba(255,255,255,.8)";ctx.lineWidth=2;ctx.stroke();ctx.setLineDash([]);
+  const e=pts[pts.length-1],q=P(e[0],e[1],0.01);
+  if(q){ctx.fillStyle="rgba(255,176,32,.95)";ctx.beginPath();ctx.arc(q.x,q.y,4,0,Math.PI*2);ctx.fill();}
+}
 
 const PROFILE=[[0,0.028],[0.03,0.042],[0.09,0.06],[0.15,0.056],[0.21,0.036],[0.25,0.023],[0.28,0.025],[0.32,0.032],[0.355,0.027],[0.38,0]];
 const PIN_PTS=[...PROFILE.map(([h,r])=>[-r,-h]),...PROFILE.slice(0,-1).reverse().map(([h,r])=>[r,-h])];
@@ -620,15 +679,12 @@ function draw(){
   ctx.fillStyle="#141726";ctx.fillRect(0,cam.hz,W,H-cam.hz);
   if(!G)return;
   const ew=LANE_W+GUTTER;
-  // 뒷벽
   poly([[-ew-0.3,DECK_END+0.7,0],[ew+0.3,DECK_END+0.7,0],[ew+0.3,DECK_END+0.7,1.1],[-ew-0.3,DECK_END+0.7,1.1]],"#0b0d18");
   const tq=P(0,DECK_END+0.7,0.85);
   if(tq){ctx.fillStyle="#ffb020";ctx.font=`900 ${Math.max(8,0.16*tq.k)}px sans-serif`;ctx.textAlign="center";ctx.fillText("STRIKE!",tq.x,tq.y);}
   ground(-ew-0.3,ew+0.3,DECK_END,DECK_END+0.7,"#07080f");
-  // 거터
   ground(-ew,-LANE_W,-3,DECK_END,"#5b6075");ground(LANE_W,ew,-3,DECK_END,"#5b6075");
   ground(-ew+0.05,-LANE_W-0.05,-3,DECK_END,"#43475a");ground(LANE_W+0.05,ew-0.05,-3,DECK_END,"#43475a");
-  // 어프로치·레인·핀덱
   ground(-LANE_W,LANE_W,-3,0,"#b9864f");
   ground(-LANE_W,LANE_W,0,LANE_LEN-0.45,"#dcae6e");
   ground(-LANE_W,LANE_W,LANE_LEN-0.45,DECK_END,"#e8c38b");
@@ -637,18 +693,14 @@ function draw(){
   for(const bd of [3,5,8,11,14])for(const s of [-1,1])ground(s*bd*0.0266-0.008,s*bd*0.0266+0.008,2.13,2.16,"#5a3a1a");
   for(let bd=5;bd<=35;bd+=5){const x=(bd-20)*0.0266,y=4.88-Math.abs(bd-20)/5*0.15;
     poly([[x-0.014,y],[x+0.014,y],[x,y+0.2]],"#5a3a1a");}
-  // 킥백 벽
   sideWall(-ew,LANE_LEN-0.9,DECK_END+0.7,0,0.75,"#262b44");sideWall(ew,LANE_LEN-0.9,DECK_END+0.7,0,0.75,"#262b44");
-  // 조준선
+  // 예상 경로
   const pre=["aim","power","spin"].includes(G.phase)||(G.phase==="cpu"&&G.cpuStage>=1);
-  if(pre){const a=G.aim*Math.PI/180;ctx.setLineDash([6,8]);
-    line3([G.x0,0.3],[G.x0+Math.tan(a)*7,7.3],"rgba(255,255,255,.75)",2);ctx.setLineDash([]);}
+  if(pre)drawGuide();
   if(G.phase==="position"){const q=P(G.x0,0.6,0);if(q){ctx.fillStyle="rgba(255,176,32,.9)";ctx.font="bold 18px sans-serif";ctx.textAlign="center";ctx.fillText("◀   ▶",q.x,q.y);}}
-  // 오브젝트 (먼 것부터)
   const objs=G.pins.filter(p=>!p.gone).map(p=>({y:p.y,f:()=>drawPin(p)}));
   if(G.ball&&G.ball.show&&G.ball.y<DECK_END+0.3)objs.push({y:G.ball.y,f:()=>drawBall(G.ball)});
   objs.sort((a,b)=>b.y-a.y).forEach(o=>o.f());
-  // 비네트
   const v=ctx.createRadialGradient(W/2,H*0.55,H*0.3,W/2,H*0.55,H);v.addColorStop(0,"rgba(0,0,0,0)");v.addColorStop(1,"rgba(0,0,0,.45)");
   ctx.fillStyle=v;ctx.fillRect(0,0,W,H);
 }
@@ -660,9 +712,10 @@ function update(dt){
   switch(G.phase){
     case "position":
       if(hold.l)G.x0-=0.5*dt;if(hold.r)G.x0+=0.5*dt;G.x0=clamp(G.x0,-0.42,0.42);G.ball.x=G.x0;break;
-    case "aim":G.aim=3.5*Math.sin(2*Math.PI*(0.95-st.leg*0.045)*G.phaseT);break;
-    case "power":G.power=(1-Math.cos(2*Math.PI*0.75*G.phaseT))/2;break;
-    case "spin":G.spin=Math.sin(2*Math.PI*(1.05-st.finger*0.05)*G.phaseT);break;
+    // 방향 바늘을 이전보다 느리게 (다리 5 기준 약 0.73Hz → 0.5Hz)
+    case "aim":G.aim=3.5*Math.sin(2*Math.PI*(0.7-st.leg*0.04)*G.phaseT);break;
+    case "power":G.power=(1-Math.cos(2*Math.PI*0.6*G.phaseT))/2;break;
+    case "spin":G.spin=Math.sin(2*Math.PI*(0.8-st.finger*0.04)*G.phaseT);break;
     case "cpu":{
       const C=G.cpuPlan,t=G.phaseT;
       G.x0+=(C.x0-G.x0)*Math.min(1,dt*5);G.ball.x=G.x0;
